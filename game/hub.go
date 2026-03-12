@@ -40,11 +40,12 @@ func (h *Hub) Run() {
 			h.Mu.Unlock()
 		case message := <-h.Broadcast:
 			h.Mu.Lock()
+			// We only save DRAWING to history, but we broadcast EVERYTHING.
 			if message.Type == "draw" {
 				h.History = append(h.History, message)
-			} else if message.Type == "clear" {
-				h.History = []DrawMessage{}
 			}
+
+			// This loop must run for 'chat' messages too!
 			for client := range h.Clients {
 				select {
 				case client.Send <- message:

@@ -139,7 +139,31 @@ canvas {
 
 .chat-messages {
     flex: 1;
+    display: flex;
+    flex-direction: column;
     overflow-y: auto;
-    margin-bottom: 10px;
-    font-size: 0.9rem;
+    background: #0d1117; /* Dark background */
+    padding: 10px;
+    min-height: 200px;  /* Force visibility */
+    border: 1px solid #30363d;
+}
+
+.chat-entry {
+    margin-bottom: 8px;
+    word-wrap: break-word;
+    font-family: 'Rajdhani', sans-serif;
+    font-size: 1rem;
+    line-height: 1.4;
+}
+
+/* Custom Scrollbar for the "Gamer" look */
+.chat-messages::-webkit-scrollbar {
+    width: 6px;
+}
+.chat-messages::-webkit-scrollbar-thumb {
+    background: #30363d;
+    border-radius: 10px;
+}
+.chat-messages::-webkit-scrollbar-thumb:hover {
+    background: var(--neon);
 }

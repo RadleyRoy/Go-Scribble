@@ -13,6 +13,88 @@ window.addEventListener('DOMContentLoaded', () => {
     window.activeColor = '#39ff14';
     let isEraser = false;
 
+    // 1. Get elements with safety checks
+    const chatInput = document.getElementById('chatInput');
+    const chatBox = document.getElementById('chatBox');
+    const sendBtn = document.getElementById('sendBtn');
+
+    // 2. The Sender Function
+    function handleSendMessage() {
+        if (!chatInput || !chatBox) {
+            console.error("Chat elements missing from HTML!");
+            return;
+        }
+
+        const text = chatInput.value.trim();
+        if (text === "") return;
+
+        if (socket.readyState !== WebSocket.OPEN) {
+            console.warn("Socket not open. Current state:", socket.readyState);
+            return;
+        }
+
+        const chatData = {
+            type: 'chat',
+            content: text,
+            sender: "Guest"
+        };
+
+        console.log("Sending chat to server...", chatData);
+        socket.send(JSON.stringify(chatData));
+        chatInput.value = "";
+    }
+
+    // 3. The Receiver Logic
+    socket.onmessage = (e) => {
+        const msg = JSON.parse(e.data);
+
+        if (msg.type === 'draw') {
+            draw(msg.prevX, msg.prevY, msg.x, msg.y, msg.color, msg.size);
+        }
+        else if (msg.type === 'clear') {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+        }
+        else if (msg.type === 'chat') {
+            console.info("Processing chat message UI update...");
+
+            // Use direct selection to avoid 'null' variable issues
+            const targetBox = document.getElementById('chatBox');
+
+            if (!targetBox) {
+                console.error("CRITICAL: Element #chatBox not found in the DOM!");
+                return;
+            }
+
+            // Create the new message line
+            const msgLine = document.createElement('div');
+            msgLine.className = "chat-entry";
+            msgLine.style.color = "#ffffff";
+            msgLine.style.marginBottom = "5px";
+
+            // Ensure we use the correct keys from the Go struct
+            const name = msg.sender || "Guest";
+            const text = msg.content || "";
+
+            msgLine.innerHTML = `<strong style="color:#39ff14">${name}:</strong> <span>${text}</span>`;
+
+            // Add to UI
+            targetBox.appendChild(msgLine);
+
+            // Scroll to bottom
+            targetBox.scrollTop = targetBox.scrollHeight;
+
+            console.info("Message successfully added to UI.");
+        }
+    };
+
+    // 4. Hook up Events
+    if (sendBtn) sendBtn.onclick = handleSendMessage;
+    if (chatInput) {
+        chatInput.onkeydown = (e) => {
+            if (e.key === 'Enter') handleSendMessage();
+        };
+    }
+
     function initCanvas() {
         const rect = canvas.parentNode.getBoundingClientRect();
         canvas.width = rect.width;
@@ -64,16 +146,6 @@ window.addEventListener('DOMContentLoaded', () => {
         ctx.lineTo(x2, y2);
         ctx.stroke();
     }
-
-    socket.onmessage = (e) => {
-        const msg = JSON.parse(e.data);
-
-        if (msg.type === 'draw')
-            draw(msg.prevX, msg.prevY, msg.x, msg.y, msg.color, msg.size);
-
-        if (msg.type === 'clear')
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-    };
 
     window.setTool = (tool) => {
         isEraser = (tool === 'eraser');
