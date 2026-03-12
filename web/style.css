@@ -1,15 +1,67 @@
-body {
-    font-family: Arial;
-    text-align: center;
+:root { 
+    --bg: #0b0e14; 
+    --panel: #161b22; 
+    --neon: #39ff14; 
+    --text: #e6edf3; 
+    --danger: #ff4444;
 }
 
-canvas {
-    border: 2px solid black;
-    cursor: crosshair;
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body { 
+    height: 100vh; width: 100vw;
+    background: var(--bg); color: var(--text); 
+    font-family: 'Rajdhani', sans-serif; 
+    display: flex; flex-direction: column; overflow: hidden; 
 }
 
-#chat {
-    width: 300px;
-    padding: 10px;
-    margin-top: 10px;
+.game-header { 
+    height: 60px; display: flex; justify-content: space-between; align-items: center; 
+    padding: 0 25px; background: var(--panel); border-bottom: 2px solid var(--neon); 
 }
+
+.logo { font-family: 'Orbitron'; font-size: 1.4rem; }
+.logo span { color: var(--neon); }
+
+.game-container { 
+    flex: 1; display: grid; grid-template-columns: 200px 1fr 280px; 
+    gap: 15px; padding: 15px; min-height: 0; 
+}
+
+.sidebar { 
+    background: var(--panel); border-radius: 12px; padding: 15px; 
+    display: flex; flex-direction: column; border: 1px solid #30363d; 
+}
+
+.canvas-area { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
+.canvas-wrapper { 
+    flex: 1; background: #000; border: 2px solid var(--neon); 
+    border-radius: 12px; position: relative; overflow: hidden;
+}
+canvas { display: block; width: 100%; height: 100%; cursor: crosshair; }
+
+.toolbar { 
+    height: 55px; background: var(--panel); border-radius: 10px; 
+    display: flex; align-items: center; justify-content: center; gap: 12px; 
+}
+
+.tool-btn { 
+    background: #0d1117; border: 1px solid #30363d; color: white; 
+    width: 38px; height: 38px; border-radius: 6px; cursor: pointer; 
+}
+.tool-btn.active { border-color: var(--neon); color: var(--neon); }
+
+/* Chat Input Styling */
+.chat-input-wrapper { 
+    display: flex; background: #0d1117; border: 1px solid #30363d; 
+    border-radius: 8px; padding: 4px; 
+}
+.chat-input-wrapper input { 
+    flex: 1; background: transparent; border: none; color: white; 
+    padding: 8px; outline: none; font-family: inherit;
+}
+.chat-input-wrapper button { 
+    background: var(--neon); border: none; width: 35px; border-radius: 5px; cursor: pointer; 
+}
+
+.chat-messages { flex: 1; overflow-y: auto; margin-bottom: 10px; font-size: 0.9rem; }

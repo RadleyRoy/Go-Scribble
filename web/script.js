@@ -1,58 +1,72 @@
-const ws = new WebSocket("ws://localhost:8080/ws")
+window.addEventListener('load', () => {
+    const canvas = document.getElementById('paintCanvas');
+    if (!canvas) return; // Safety check
+    
+    const ctx = canvas.getContext('2d');
+    const socket = new WebSocket(`ws://${window.location.host}/ws`);
 
-const canvas = document.getElementById("board")
-const ctx = canvas.getContext("2d")
+    let painting = false;
+    let lastPos = null;
+    window.activeColor = '#39ff14'; // Set on window to be visible to picker
+    let isEraser = false;
 
-let drawing = false
-
-canvas.addEventListener("mousedown", () => drawing = true)
-canvas.addEventListener("mouseup", () => drawing = false)
-
-canvas.addEventListener("mousemove", draw)
-
-function draw(e) {
-
-    if (!drawing) return
-
-    const data = {
-        type: "draw",
-        x: e.offsetX,
-        y: e.offsetY
+    function initCanvas() {
+        const rect = canvas.parentNode.getBoundingClientRect();
+        canvas.width = rect.width;
+        canvas.height = rect.height;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
     }
 
-    ws.send(JSON.stringify(data))
-}
-
-ws.onmessage = (event) => {
-
-    const msg = JSON.parse(event.data)
-
-    if (msg.type === "draw") {
-
-        ctx.lineTo(msg.x, msg.y)
-        ctx.stroke()
-
+    function getMousePos(e) {
+        const rect = canvas.getBoundingClientRect();
+        return { x: e.clientX - rect.left, y: e.clientY - rect.top };
     }
 
-    if (msg.type === "chat") {
+    // Drawing Logic
+    canvas.onmousedown = (e) => { painting = true; lastPos = getMousePos(e); };
+    window.onmouseup = () => { painting = false; lastPos = null; };
+    canvas.onmousemove = (e) => {
+        if (!painting) return;
+        const pos = getMousePos(e);
+        if (lastPos) {
+            const color = isEraser ? '#000000' : window.activeColor;
+            const size = isEraser ? 25 : 5;
+            draw(lastPos.x, lastPos.y, pos.x, pos.y, color, size);
+            if (socket.readyState === WebSocket.OPEN) {
+                socket.send(JSON.stringify({ type: 'draw', x: pos.x, y: pos.y, prevX: lastPos.x, prevY: lastPos.y, color, size }));
+            }
+        }
+        lastPos = pos;
+    };
 
-        const li = document.createElement("li")
-        li.innerText = msg.data
-        document.getElementById("messages").appendChild(li)
-
+    function draw(x1, y1, x2, y2, color, size) {
+        ctx.beginPath();
+        ctx.strokeStyle = color;
+        ctx.lineWidth = size;
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
     }
-}
 
-document.getElementById("chat").addEventListener("keydown", e => {
+    socket.onmessage = (e) => {
+        const msg = JSON.parse(e.data);
+        if (msg.type === 'draw') draw(msg.prevX, msg.prevY, msg.x, msg.y, msg.color, msg.size);
+        if (msg.type === 'clear') ctx.clearRect(0, 0, canvas.width, canvas.height);
+    };
 
-    if (e.key === "Enter") {
+    // Attach functions to the WINDOW so HTML onclicks can find them
+    window.setTool = (tool) => {
+        isEraser = (tool === 'eraser');
+        document.getElementById('pencilBtn').classList.toggle('active', !isEraser);
+        document.getElementById('eraserBtn').classList.toggle('active', isEraser);
+    };
 
-        ws.send(JSON.stringify({
-            type: "chat",
-            data: e.target.value
-        }))
+    window.clearCanvas = () => {
+        socket.send(JSON.stringify({type: 'clear'}));
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+    };
 
-        e.target.value = ""
-    }
-
-})
+    window.addEventListener('resize', initCanvas);
+    initCanvas();
+});

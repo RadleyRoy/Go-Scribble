@@ -2,40 +2,52 @@ package game
 
 import (
 	"log"
+	"net/http"
 
 	"github.com/gorilla/websocket"
 )
 
+var upgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool { return true },
+}
+
 type Client struct {
-	conn *websocket.Conn
-	hub  *Hub
-	send chan []byte
+	Hub  *Hub
+	Conn *websocket.Conn
+	Send chan DrawMessage
 }
 
-func (c *Client) readPump() {
-
+func (c *Client) ReadPump() {
 	defer func() {
-		c.hub.unregister <- c
-		c.conn.Close()
+		c.Hub.Unregister <- c
+		c.Conn.Close()
 	}()
-
 	for {
-		_, message, err := c.conn.ReadMessage()
-		if err != nil {
-			log.Println(err)
+		var msg DrawMessage
+		if err := c.Conn.ReadJSON(&msg); err != nil {
 			break
 		}
-
-		c.hub.broadcast <- message
+		c.Hub.Broadcast <- msg
 	}
 }
 
-func (c *Client) writePump() {
-
-	for msg := range c.send {
-		err := c.conn.WriteMessage(websocket.TextMessage, msg)
-		if err != nil {
+func (c *Client) WritePump() {
+	for msg := range c.Send {
+		if err := c.Conn.WriteJSON(msg); err != nil {
 			break
 		}
 	}
+}
+
+func HandleConnections(hub *Hub, w http.ResponseWriter, r *http.Request) {
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	client := &Client{Hub: hub, Conn: conn, Send: make(chan DrawMessage, 256)}
+	client.Hub.Register <- client
+
+	go client.WritePump()
+	go client.ReadPump()
 }

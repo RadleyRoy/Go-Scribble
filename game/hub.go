@@ -1,62 +1,59 @@
 package game
 
-import (
-	"net/http"
-
-	"github.com/gorilla/websocket"
-)
+import "sync"
 
 type Hub struct {
-	clients    map[*Client]bool
-	broadcast  chan []byte
-	register   chan *Client
-	unregister chan *Client
+	Clients    map[*Client]bool
+	Broadcast  chan DrawMessage
+	Register   chan *Client
+	Unregister chan *Client
+	History    []DrawMessage
+	Mu         sync.Mutex
 }
 
 func NewHub() *Hub {
 	return &Hub{
-		clients:    make(map[*Client]bool),
-		broadcast:  make(chan []byte),
-		register:   make(chan *Client),
-		unregister: make(chan *Client),
+		Clients:    make(map[*Client]bool),
+		Broadcast:  make(chan DrawMessage),
+		Register:   make(chan *Client),
+		Unregister: make(chan *Client),
+		History:    []DrawMessage{},
 	}
 }
 
 func (h *Hub) Run() {
-
 	for {
 		select {
-
-		case client := <-h.register:
-			h.clients[client] = true
-
-		case client := <-h.unregister:
-			delete(h.clients, client)
-
-		case message := <-h.broadcast:
-			for client := range h.clients {
-				client.send <- message
+		case client := <-h.Register:
+			h.Mu.Lock()
+			h.Clients[client] = true
+			for _, msg := range h.History {
+				client.Send <- msg
 			}
+			h.Mu.Unlock()
+		case client := <-h.Unregister:
+			h.Mu.Lock()
+			if _, ok := h.Clients[client]; ok {
+				delete(h.Clients, client)
+				close(client.Send)
+			}
+			h.Mu.Unlock()
+		case message := <-h.Broadcast:
+			h.Mu.Lock()
+			if message.Type == "draw" {
+				h.History = append(h.History, message)
+			} else if message.Type == "clear" {
+				h.History = []DrawMessage{}
+			}
+			for client := range h.Clients {
+				select {
+				case client.Send <- message:
+				default:
+					close(client.Send)
+					delete(h.Clients, client)
+				}
+			}
+			h.Mu.Unlock()
 		}
 	}
-}
-
-var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool { return true },
-}
-
-func HandleWebSocket(hub *Hub, w http.ResponseWriter, r *http.Request) {
-
-	conn, _ := upgrader.Upgrade(w, r, nil)
-
-	client := &Client{
-		conn: conn,
-		hub:  hub,
-		send: make(chan []byte),
-	}
-
-	hub.register <- client
-
-	go client.writePump()
-	go client.readPump()
 }
