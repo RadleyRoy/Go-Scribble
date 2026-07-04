@@ -9,58 +9,43 @@ import (
 )
 
 const (
-	// writeWait is the time allowed to write a message to the peer.
-	writeWait = 10 * time.Second
-	// pongWait is how long we wait for a pong before treating the peer as gone.
-	pongWait = 60 * time.Second
-	// pingPeriod is how often we ping the peer. It must be less than pongWait.
-	pingPeriod = (pongWait * 9) / 10
-	// maxMessageSize caps the size of an inbound message to protect the server.
-	maxMessageSize = 8192
-	// sendBufferSize is how many outbound messages may queue before a client is
-	// considered too slow and disconnected.
+	writeWait      = 10 * time.Second
+	pongWait       = 60 * time.Second
+	pingPeriod     = (pongWait * 9) / 10
+	maxMessageSize = 16384
 	sendBufferSize = 256
 )
 
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
-	// CheckOrigin allows connections from any origin. This is convenient for
-	// local development; a production deployment should restrict it.
+	// Allows any origin for easy local development; restrict in production.
 	CheckOrigin: func(r *http.Request) bool { return true },
 }
 
-// Client is a single WebSocket connection. Its send channel is written to and
-// closed only by the Hub goroutine; readPump and writePump own the connection.
+// Client is a single WebSocket connection. Its send channel carries the various
+// outbound payload types (Message, ChatMessage, StateMessage) and is written to
+// and closed only by the engine goroutine.
 type Client struct {
-	hub  *Hub
-	conn *websocket.Conn
-	send chan Message
+	engine *Engine
+	conn   *websocket.Conn
+	send   chan interface{}
 }
 
-// trySend queues a message without blocking. It returns false if the client's
-// buffer is full, signalling to the hub that the client should be dropped.
-// Only the hub goroutine calls this.
-func (c *Client) trySend(msg Message) bool {
+// trySend queues a payload without blocking. Only the engine goroutine calls it.
+func (c *Client) trySend(v interface{}) bool {
 	select {
-	case c.send <- msg:
+	case c.send <- v:
 		return true
 	default:
 		return false
 	}
 }
 
-// closeSend closes the outbound channel, ending writePump. Only the hub
-// goroutine calls this, and only once per client.
-func (c *Client) closeSend() {
-	close(c.send)
-}
-
-// readPump reads messages from the connection and forwards the client-originated
-// ones to the hub. It runs until the connection errors or closes.
+// readPump reads client frames and forwards them to the engine.
 func (c *Client) readPump() {
 	defer func() {
-		c.hub.unregister <- c
+		c.engine.unregister <- c
 		c.conn.Close()
 	}()
 
@@ -78,18 +63,11 @@ func (c *Client) readPump() {
 			}
 			return
 		}
-
-		// Only relay the message types a client is allowed to originate; the
-		// server is the sole author of word/timer/history messages.
-		switch msg.Type {
-		case MessageDraw, MessageClear, MessageChat:
-			c.hub.Broadcast(msg)
-		}
+		c.engine.incoming <- inbound{client: c, msg: msg}
 	}
 }
 
-// writePump writes queued messages to the connection and sends periodic pings
-// to keep the connection alive and detect dead peers.
+// writePump writes queued payloads to the connection and pings periodically.
 func (c *Client) writePump() {
 	ticker := time.NewTicker(pingPeriod)
 	defer func() {
@@ -99,14 +77,13 @@ func (c *Client) writePump() {
 
 	for {
 		select {
-		case msg, ok := <-c.send:
+		case v, ok := <-c.send:
 			_ = c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if !ok {
-				// The hub closed the channel: tell the peer and stop.
 				_ = c.conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
-			if err := c.conn.WriteJSON(msg); err != nil {
+			if err := c.conn.WriteJSON(v); err != nil {
 				return
 			}
 		case <-ticker.C:
@@ -118,21 +95,36 @@ func (c *Client) writePump() {
 	}
 }
 
-// ServeWS upgrades an HTTP request to a WebSocket connection, registers the new
-// client with the hub, and starts its read and write pumps.
-func ServeWS(hub *Hub, w http.ResponseWriter, r *http.Request) {
+// ServeWS upgrades an HTTP request to a WebSocket connection and registers the
+// client with the room named by the "room" query parameter.
+func ServeWS(rooms *RoomManager, w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Println("websocket upgrade error:", err)
 		return
 	}
 
-	client := &Client{
-		hub:  hub,
-		conn: conn,
-		send: make(chan Message, sendBufferSize),
+	engine, ok := rooms.Get(r.URL.Query().Get("room"))
+	if !ok {
+		_ = conn.WriteJSON(ErrorMessage{Type: MsgError, Content: "Room not found"})
+		conn.Close()
+		return
 	}
-	hub.register <- client
+
+	client := &Client{
+		engine: engine,
+		conn:   conn,
+		send:   make(chan interface{}, sendBufferSize),
+	}
+
+	// Guard against the room being torn down between lookup and registration.
+	select {
+	case engine.register <- client:
+	case <-engine.stopped:
+		_ = conn.WriteJSON(ErrorMessage{Type: MsgError, Content: "Room closed"})
+		conn.Close()
+		return
+	}
 
 	go client.writePump()
 	go client.readPump()

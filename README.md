@@ -1,19 +1,26 @@
 # Go-Scribble
 
-A small real-time multiplayer drawing game (a Scribble/Skribbl clone) built with
-Go and a vanilla-JavaScript front end. Players share a canvas over WebSockets:
-strokes, chat, the round word and the countdown are all broadcast live, and a
-player who joins mid-round is caught up with the current state.
+A real-time multiplayer drawing-and-guessing game in the style of skribbl.io,
+built with Go and a vanilla-JavaScript front end. Players take turns drawing a
+secret word while everyone else races to guess it in chat for points.
 
-## Features
+## Gameplay
 
-- Real-time collaborative canvas over WebSockets (`gorilla/websocket`).
-- Live chat.
-- Automatic rounds: a new word is chosen and the canvas cleared every round.
-- Countdown timer broadcast every second.
-- Mid-round joiners receive a snapshot (current word, timer and drawing so far).
-- Pluggable word source: an offline word list by default, or OpenAI when
-  configured.
+- **Private rooms.** Create a room to get a short shareable code, or enter a
+  code to join friends. Each room is an isolated game.
+- Players join with a name and appear in the live scoreboard.
+- Each turn one player is the **drawer** and **picks one of three offered words**;
+  everyone else sees a masked hint (`_ _ _`) that gradually reveals letters.
+- Guessers type in chat. A correct guess is hidden from other players, announced
+  as "X guessed the word!", and scored — **faster guesses earn more points**.
+- The drawer scores for each player who guesses.
+- A turn ends when everyone has guessed or the timer runs out; the word is then
+  revealed. After every player has drawn, the round advances.
+- After the configured number of rounds the final scoreboard is shown and a new
+  game begins automatically.
+- Only the current drawer can draw or clear the canvas.
+- Players who join mid-turn are caught up with the current drawing and state.
+- Empty rooms are torn down automatically when the last player leaves.
 
 ## Requirements
 
@@ -25,21 +32,13 @@ player who joins mid-round is caught up with the current state.
 go run .
 ```
 
-Then open <http://localhost:8080> in one or more browser tabs.
+Open <http://localhost:8080>, enter a name, and **create a room**. Open the URL
+again in another tab/device, enter the same **room code**, and play. See
+**RUNNING.md** for a detailed guide, LAN play, and troubleshooting.
 
-By default words come from a built-in offline list (`LocalWordProvider`), so no
-network access or API key is needed. To generate words with OpenAI instead, set
-an API key before starting:
-
-```sh
-# macOS/Linux
-export OPENAI_API_KEY=sk-...
-go run .
-
-# Windows (PowerShell)
-$env:OPENAI_API_KEY = "sk-..."
-go run .
-```
+Words come from a built-in offline list by default. To have Claude generate the
+word choices instead, set `ANTHROPIC_API_KEY` before starting the server (uses
+the official Anthropic Go SDK and the `claude-opus-4-8` model).
 
 ## Testing
 
@@ -47,33 +46,56 @@ go run .
 go test ./...
 ```
 
+Tests live in the top-level `tests/` package and exercise the code through its
+public API, including a real two-player game played over WebSockets.
+
 ## Project layout
 
 ```
-main.go              Composition root: wiring, HTTP server, graceful shutdown.
+main.go              Composition root: wiring, HTTP + /api/rooms, shutdown.
 game/
-  message.go         The Message envelope and its type constants (wire protocol).
-  hub.go             Client registry + broadcast loop; single-owner, no locks.
+  message.go         Wire protocol: envelope, state, chat, choices, player views.
+  engine.go          The game: single-goroutine state machine (word choice, turns,
+                     guessing, scoring, rounds, hints, phases, disconnects).
+  room.go            RoomManager: private rooms, code generation, cleanup.
+  player.go          Per-player state.
   client.go          WebSocket connection: read/write pumps, ping/pong, limits.
-  game.go            Round orchestration (pick word -> clear -> announce -> countdown).
-  timer.go           Cancellable per-second countdown.
   word.go            WordProvider interface + offline LocalWordProvider.
-  openai_word.go     Optional OpenAI-backed WordProvider.
+  claude_word.go     Optional Claude-backed WordProvider (Anthropic Go SDK).
 web/
-  index.html         Page structure.
+  index.html         Page structure (lobby, canvas, players, chat, word choice).
   style.css          Styling.
-  script.js          Client: rendering, drawing, chat, socket handling.
+  script.js          Client: lobby, state rendering, drawing, guessing, sockets.
+tests/
+  word_test.go       Local word-provider tests.
+  claude_word_test.go Claude provider against a stub Anthropic server.
+  room_test.go       Room creation, codes, and empty-room cleanup.
+  engine_test.go     End-to-end WebSocket game-flow test (room + word choice).
 ```
 
 ## Design notes
 
-- **Single-owner concurrency.** All shared hub state is read and written only by
-  the `Hub.Run` goroutine; other goroutines talk to it through channels, so no
-  mutexes are needed.
-- **Dependency inversion.** The game depends on the `WordProvider` interface, so
-  the word source (offline list, OpenAI, a database, …) can be swapped without
-  changing game logic.
-- **Backpressure.** A client that cannot keep up with the broadcast rate is
-  disconnected rather than allowed to block the hub. The drawing history is
-  replayed to new clients as a single message instead of streamed segment by
-  segment.
+- **Single-owner concurrency.** All game and connection state is read and written
+  only by the `Engine.Run` goroutine; other goroutines interact through channels,
+  so no mutexes are needed.
+- **Dependency inversion.** The engine depends on the `WordProvider` interface,
+  so the word source (offline list, Claude, a database, …) can be swapped freely.
+- **Room isolation.** Each private room runs its own `Engine` on its own
+  goroutine; the `RoomManager` owns their lifecycles and reaps empties.
+- **Non-blocking word fetch.** The (possibly networked) word provider is called
+  in a goroutine so a slow API can never freeze a room's timers.
+- **Configurable timing.** `game.Config` makes round/turn/reveal durations
+  injectable, which keeps the engine fully testable (a whole game runs in
+  milliseconds in the integration test).
+- **Fixed drawing resolution.** The canvas draws into a fixed logical space
+  (`LogicalWidth`×`LogicalHeight`) that CSS scales to the window. This keeps
+  drawings aligned across clients of different sizes and prevents them from being
+  lost on window resize.
+- **Backpressure.** A client that can't keep up with broadcasts is disconnected
+  rather than allowed to block the engine; the drawing so far is replayed to new
+  clients as a single message.
+
+## Possible next steps
+
+Avatars, an undo tool, a fill bucket, persisted stats/leaderboards, and a
+"kick"/host role are natural extensions of the current design.

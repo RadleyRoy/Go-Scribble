@@ -3,7 +3,9 @@
     --panel: #161b22;
     --neon: #39ff14;
     --text: #e6edf3;
+    --muted: #8b949e;
     --danger: #ff4444;
+    --border: #30363d;
 }
 
 * {
@@ -23,6 +25,7 @@ body {
     overflow: hidden;
 }
 
+/* --- Header --------------------------------------------------------------- */
 .game-header {
     height: 60px;
     display: flex;
@@ -42,6 +45,53 @@ body {
     color: var(--neon);
 }
 
+.round-info {
+    color: var(--muted);
+    font-weight: 700;
+    letter-spacing: 1px;
+}
+
+.room-chip {
+    font-family: 'Orbitron';
+    font-size: 0.9rem;
+    letter-spacing: 2px;
+    color: var(--neon);
+    border: 1px solid var(--neon);
+    border-radius: 6px;
+    padding: 3px 10px;
+    min-width: 60px;
+    text-align: center;
+}
+
+.room-chip:empty {
+    display: none;
+}
+
+.word-slots {
+    font-family: 'Orbitron';
+    font-size: 1.3rem;
+    letter-spacing: 4px;
+}
+
+.neon-text {
+    color: var(--neon);
+    font-weight: 700;
+    font-size: 1.1rem;
+    min-width: 70px;
+    text-align: right;
+}
+
+/* --- Status banner -------------------------------------------------------- */
+.status-banner {
+    text-align: center;
+    padding: 6px;
+    background: #0d1117;
+    color: var(--muted);
+    font-weight: 600;
+    border-bottom: 1px solid var(--border);
+}
+
+/* --- Layout -------------------------------------------------------------- */
 .game-container {
     flex: 1;
     display: grid;
@@ -57,25 +107,85 @@ body {
     padding: 15px;
     display: flex;
     flex-direction: column;
-    border: 1px solid #30363d;
+    border: 1px solid var(--border);
+    min-height: 0;
 }
 
+.sidebar h3 {
+    margin-bottom: 10px;
+    font-size: 1rem;
+    letter-spacing: 1px;
+}
+
+/* --- Players ------------------------------------------------------------- */
+.player-list {
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.player-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: #0d1117;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 10px;
+    gap: 6px;
+}
+
+.player-row.you {
+    border-color: var(--neon);
+}
+
+.player-row.guessed {
+    background: #0f2417;
+}
+
+.player-name {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.player-score {
+    color: var(--neon);
+    font-weight: 700;
+}
+
+.player-row .fa-pencil-alt {
+    color: var(--neon);
+}
+
+.player-row .fa-check {
+    color: var(--neon);
+}
+
+/* --- Canvas -------------------------------------------------------------- */
 .canvas-area {
     display: flex;
     flex-direction: column;
     gap: 10px;
     min-height: 0;
+    align-items: center;
 }
 
 .canvas-wrapper {
     flex: 1;
+    width: 100%;
+    max-width: 100%;
+    aspect-ratio: 4 / 3;
     background: #000;
     border: 2px solid var(--neon);
     border-radius: 12px;
     position: relative;
     overflow: hidden;
-    width: 100%;
-    height: 400px;
+    margin: 0 auto;
 }
 
 canvas {
@@ -83,11 +193,38 @@ canvas {
     width: 100%;
     height: 100%;
     cursor: crosshair;
+    touch-action: none;
 }
 
+canvas.locked {
+    cursor: not-allowed;
+}
+
+.canvas-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 20px;
+    background: rgba(6, 9, 15, 0.82);
+    color: var(--text);
+    font-size: 1.2rem;
+    font-weight: 700;
+    white-space: pre-line;
+}
+
+.canvas-overlay.hidden {
+    display: none;
+}
+
+/* --- Toolbar ------------------------------------------------------------- */
 .toolbar {
     height: 55px;
+    width: 100%;
     background: var(--panel);
+    border: 1px solid var(--border);
     border-radius: 10px;
     display: flex;
     align-items: center;
@@ -95,9 +232,14 @@ canvas {
     gap: 12px;
 }
 
+.toolbar.disabled {
+    opacity: 0.4;
+    pointer-events: none;
+}
+
 .tool-btn {
     background: #0d1117;
-    border: 1px solid #30363d;
+    border: 1px solid var(--border);
     color: white;
     width: 38px;
     height: 38px;
@@ -110,11 +252,58 @@ canvas {
     color: var(--neon);
 }
 
-/* Chat Input Styling */
+.tool-btn.danger:hover {
+    border-color: var(--danger);
+    color: var(--danger);
+}
+
+.brush-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--muted);
+}
+
+/* --- Chat ---------------------------------------------------------------- */
+.chat-messages {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+    background: #0d1117;
+    padding: 10px;
+    min-height: 120px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 10px;
+}
+
+.chat-entry {
+    margin-bottom: 6px;
+    word-wrap: break-word;
+    font-size: 0.95rem;
+    line-height: 1.4;
+}
+
+.chat-entry .author {
+    color: var(--neon);
+    font-weight: 700;
+}
+
+.chat-entry.system {
+    color: var(--muted);
+    font-style: italic;
+}
+
+.chat-entry.correct {
+    color: var(--neon);
+    font-weight: 700;
+}
+
 .chat-input-wrapper {
     display: flex;
     background: #0d1117;
-    border: 1px solid #30363d;
+    border: 1px solid var(--border);
     border-radius: 8px;
     padding: 4px;
 }
@@ -132,38 +321,122 @@ canvas {
 .chat-input-wrapper button {
     background: var(--neon);
     border: none;
-    width: 35px;
+    width: 38px;
     border-radius: 5px;
     cursor: pointer;
 }
 
-.chat-messages {
-    flex: 1;
+/* --- Overlay (name entry) ------------------------------------------------ */
+.overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(6, 9, 15, 0.9);
+}
+
+.overlay.hidden {
+    display: none;
+}
+
+.overlay-card {
+    background: var(--panel);
+    border: 1px solid var(--neon);
+    border-radius: 14px;
+    padding: 30px 34px;
+    text-align: center;
     display: flex;
     flex-direction: column;
-    overflow-y: auto;
-    background: #0d1117; /* Dark background */
-    padding: 10px;
-    min-height: 200px;  /* Force visibility */
-    border: 1px solid #30363d;
+    gap: 14px;
+    width: min(90vw, 360px);
 }
 
-.chat-entry {
-    margin-bottom: 8px;
-    word-wrap: break-word;
-    font-family: 'Rajdhani', sans-serif;
+.overlay-card p {
+    color: var(--muted);
+}
+
+.overlay-card input {
+    background: #0d1117;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: white;
+    padding: 12px;
+    font-family: inherit;
     font-size: 1rem;
-    line-height: 1.4;
+    outline: none;
 }
 
-/* Custom Scrollbar for the "Gamer" look */
-.chat-messages::-webkit-scrollbar {
+.overlay-card input:focus {
+    border-color: var(--neon);
+}
+
+.overlay-card button {
+    background: var(--neon);
+    color: #04240f;
+    border: none;
+    border-radius: 8px;
+    padding: 12px;
+    font-weight: 700;
+    font-size: 1rem;
+    cursor: pointer;
+}
+
+.divider {
+    color: var(--muted);
+    font-size: 0.85rem;
+    margin: 4px 0;
+}
+
+.join-row {
+    display: flex;
+    gap: 8px;
+}
+
+.join-row input {
+    flex: 1;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+}
+
+.join-row button {
+    width: 90px;
+    flex-shrink: 0;
+}
+
+.lobby-error {
+    color: var(--danger);
+    font-size: 0.9rem;
+    min-height: 1em;
+}
+
+.choice-buttons {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.choice-buttons button {
+    font-family: 'Rajdhani', sans-serif;
+    font-size: 1.2rem;
+    letter-spacing: 1px;
+    text-transform: capitalize;
+}
+
+/* --- Scrollbars ---------------------------------------------------------- */
+.chat-messages::-webkit-scrollbar,
+.player-list::-webkit-scrollbar {
     width: 6px;
 }
-.chat-messages::-webkit-scrollbar-thumb {
-    background: #30363d;
+
+.chat-messages::-webkit-scrollbar-thumb,
+.player-list::-webkit-scrollbar-thumb {
+    background: var(--border);
     border-radius: 10px;
 }
-.chat-messages::-webkit-scrollbar-thumb:hover {
+
+.chat-messages::-webkit-scrollbar-thumb:hover,
+.player-list::-webkit-scrollbar-thumb:hover {
     background: var(--neon);
 }

@@ -12,40 +12,72 @@
 </head>
 
 <body>
+    <!-- Lobby: create or join a private room -->
+    <div id="lobbyOverlay" class="overlay">
+        <div class="overlay-card">
+            <div class="logo">DOODLE<span>ROYALE</span></div>
+            <input type="text" id="nameInput" maxlength="20" placeholder="Your name" autocomplete="off">
+            <button id="createBtn">Create private room</button>
+            <div class="divider">— or join a room —</div>
+            <div class="join-row">
+                <input type="text" id="codeInput" maxlength="8" placeholder="ROOM CODE" autocomplete="off">
+                <button id="joinBtn">Join</button>
+            </div>
+            <div id="lobbyError" class="lobby-error"></div>
+        </div>
+    </div>
+
+    <!-- Word choice (drawer only) -->
+    <div id="choiceOverlay" class="overlay hidden">
+        <div class="overlay-card">
+            <p>Choose a word to draw</p>
+            <div id="choiceButtons" class="choice-buttons"></div>
+        </div>
+    </div>
+
     <div class="game-header">
         <div class="logo">DOODLE<span>ROYALE</span></div>
-        <div class="word-slots">_ _ _ _ E</div>
-        <div class="neon-text"><i class="fas fa-clock"></i> 01:14</div>
+        <div class="room-chip" id="roomChip" title="Share this code with friends"></div>
+        <div class="round-info" id="roundInfo">Round –/–</div>
+        <div class="word-slots" id="wordSlots">_ _ _ _ _</div>
+        <div class="neon-text" id="timer"><i class="fas fa-clock"></i> --</div>
     </div>
+
+    <div class="status-banner" id="statusBanner">Connecting…</div>
 
     <div class="game-container">
         <div class="sidebar">
             <h3><i class="fas fa-users"></i> PLAYERS</h3>
-            <div id="playerList">Guest</div>
+            <div id="playerList" class="player-list"></div>
         </div>
 
         <div class="canvas-area">
             <div class="canvas-wrapper">
-                <canvas id="paintCanvas"></canvas>
+                <canvas id="paintCanvas" width="800" height="600"></canvas>
+                <div id="canvasOverlay" class="canvas-overlay hidden"></div>
             </div>
-            <div class="toolbar">
+            <div class="toolbar" id="toolbar">
                 <button id="pencilBtn" class="tool-btn active" title="Pencil"><i class="fas fa-pencil-alt"></i></button>
                 <button id="eraserBtn" class="tool-btn" title="Eraser"><i class="fas fa-eraser"></i></button>
                 <input type="color" id="colorPicker" value="#39ff14" title="Colour">
+                <label class="brush-label" title="Brush size">
+                    <i class="fas fa-circle"></i>
+                    <input type="range" id="brushSize" min="2" max="40" value="5">
+                </label>
                 <button id="clearBtn" class="tool-btn danger" title="Clear canvas"><i class="fas fa-trash-can"></i></button>
             </div>
         </div>
 
         <div class="sidebar">
-            <h3>CHAT</h3>
+            <h3><i class="fas fa-comments"></i> CHAT &amp; GUESSES</h3>
             <div id="chatBox" class="chat-messages"></div>
-
             <div class="chat-input-wrapper">
-                <input type="text" id="chatInput" placeholder="Type here...">
-                <button id="sendBtn">Send</button>
+                <input type="text" id="chatInput" placeholder="Type your guess…" autocomplete="off">
+                <button id="sendBtn"><i class="fas fa-paper-plane"></i></button>
             </div>
         </div>
     </div>
+
     <script src="script.js" defer></script>
 </body>
 

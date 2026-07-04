@@ -1,5 +1,6 @@
-// Doodle Royale client. Connects to the Go WebSocket hub, renders incoming
-// drawing/chat/word/timer events and publishes local drawing and chat actions.
+// Doodle Royale client. Handles the lobby (create/join a private room), then
+// renders the game state pushed by the Go engine and publishes the local
+// player's drawing, guesses, chat, and word choice.
 window.addEventListener('DOMContentLoaded', () => {
     const canvas = document.getElementById('paintCanvas');
     if (!canvas) {
@@ -7,43 +8,124 @@ window.addEventListener('DOMContentLoaded', () => {
         return;
     }
     const ctx = canvas.getContext('2d');
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
 
-    // --- Configuration -------------------------------------------------------
-    const PEN_SIZE = 5;
-    const ERASER_SIZE = 25;
+    // The canvas backing store is a fixed logical resolution (see width/height
+    // attributes in the HTML, mirrored by the server's LogicalWidth/Height).
+    // CSS scales it to fit the window, so drawings stay aligned across clients
+    // and survive window resizes without being cleared.
     const ERASER_COLOR = '#000000'; // matches the canvas background
-    const DEFAULT_COLOR = '#39ff14';
 
     // --- Local state ---------------------------------------------------------
-    const state = {
+    const local = {
         painting: false,
         lastPos: null,
-        color: DEFAULT_COLOR,
+        color: '#39ff14',
+        size: 5,
         eraser: false,
+        canDraw: false, // true only while we are the drawer in the drawing phase
+        name: 'Player',
     };
 
-    // --- WebSocket -----------------------------------------------------------
-    const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-    const socket = new WebSocket(`${wsProtocol}://${window.location.host}/ws`);
+    let socket = null;
+
+    // --- Elements ------------------------------------------------------------
+    const el = {
+        lobbyOverlay: document.getElementById('lobbyOverlay'),
+        nameInput: document.getElementById('nameInput'),
+        createBtn: document.getElementById('createBtn'),
+        codeInput: document.getElementById('codeInput'),
+        joinBtn: document.getElementById('joinBtn'),
+        lobbyError: document.getElementById('lobbyError'),
+        roomChip: document.getElementById('roomChip'),
+        roundInfo: document.getElementById('roundInfo'),
+        wordSlots: document.getElementById('wordSlots'),
+        timer: document.getElementById('timer'),
+        statusBanner: document.getElementById('statusBanner'),
+        playerList: document.getElementById('playerList'),
+        chatBox: document.getElementById('chatBox'),
+        chatInput: document.getElementById('chatInput'),
+        sendBtn: document.getElementById('sendBtn'),
+        toolbar: document.getElementById('toolbar'),
+        pencilBtn: document.getElementById('pencilBtn'),
+        eraserBtn: document.getElementById('eraserBtn'),
+        colorPicker: document.getElementById('colorPicker'),
+        brushSize: document.getElementById('brushSize'),
+        clearBtn: document.getElementById('clearBtn'),
+        canvasOverlay: document.getElementById('canvasOverlay'),
+        choiceOverlay: document.getElementById('choiceOverlay'),
+        choiceButtons: document.getElementById('choiceButtons'),
+    };
 
     function send(payload) {
-        if (socket.readyState === WebSocket.OPEN) {
+        if (socket && socket.readyState === WebSocket.OPEN) {
             socket.send(JSON.stringify(payload));
         }
     }
 
-    socket.addEventListener('message', (event) => {
-        let msg;
+    // --- Lobby: create / join a room ----------------------------------------
+    async function createRoom() {
+        el.lobbyError.textContent = '';
         try {
-            msg = JSON.parse(event.data);
-        } catch {
-            return; // ignore malformed frames
+            const res = await fetch('/api/rooms', { method: 'POST' });
+            if (!res.ok) throw new Error(`server responded ${res.status}`);
+            const { code } = await res.json();
+            connect(code);
+        } catch (err) {
+            el.lobbyError.textContent = 'Could not create a room. Try again.';
+            console.error(err);
         }
-        handleServerMessage(msg);
-    });
+    }
 
+    function joinRoom() {
+        el.lobbyError.textContent = '';
+        const code = el.codeInput.value.trim().toUpperCase();
+        if (!code) {
+            el.lobbyError.textContent = 'Enter a room code to join.';
+            return;
+        }
+        connect(code);
+    }
+
+    function connect(code) {
+        local.name = el.nameInput.value.trim() || 'Player';
+        const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+        socket = new WebSocket(`${wsProtocol}://${window.location.host}/ws?room=${encodeURIComponent(code)}`);
+
+        socket.addEventListener('open', () => {
+            send({ type: 'join', name: local.name });
+            el.roomChip.textContent = code;
+            el.lobbyOverlay.classList.add('hidden');
+            setBanner('Connected. Waiting for the game…');
+            if (el.chatInput) el.chatInput.focus();
+        });
+        socket.addEventListener('close', () => {
+            if (!el.lobbyOverlay.classList.contains('hidden')) return;
+            setBanner('Disconnected. Refresh to reconnect.');
+        });
+        socket.addEventListener('message', (event) => {
+            let msg;
+            try {
+                msg = JSON.parse(event.data);
+            } catch {
+                return;
+            }
+            handleServerMessage(msg);
+        });
+    }
+
+    el.createBtn.addEventListener('click', createRoom);
+    el.joinBtn.addEventListener('click', joinRoom);
+    el.codeInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') joinRoom(); });
+    el.nameInput.focus();
+
+    // --- Server messages -----------------------------------------------------
     function handleServerMessage(msg) {
         switch (msg.type) {
+            case 'state':
+                renderState(msg);
+                break;
             case 'draw':
                 drawSegment(msg);
                 break;
@@ -54,15 +136,149 @@ window.addEventListener('DOMContentLoaded', () => {
                 (msg.history || []).forEach(drawSegment);
                 break;
             case 'chat':
-                appendChat(msg.sender || 'Guest', msg.content || '');
+                appendChat(msg);
                 break;
             case 'timer':
-                updateTimer(msg.content);
+                setTimer(msg.content);
                 break;
-            case 'word':
-                updateWord(msg.content || '');
+            case 'choices':
+                showChoices(msg.choices || []);
+                break;
+            case 'error':
+                showLobbyError(msg.content || 'Something went wrong.');
                 break;
         }
+    }
+
+    function showLobbyError(text) {
+        if (socket) socket.close();
+        el.lobbyOverlay.classList.remove('hidden');
+        el.roomChip.textContent = '';
+        el.lobbyError.textContent = text;
+    }
+
+    // --- State rendering -----------------------------------------------------
+    function renderState(s) {
+        local.canDraw = !!s.isDrawer && s.phase === 'drawing';
+        if (s.phase !== 'choosing') hideChoiceOverlay();
+        renderPlayers(s.players || [], s.youId);
+        renderHeader(s);
+        renderStatus(s);
+        updateToolbarLock();
+    }
+
+    function renderHeader(s) {
+        el.roundInfo.textContent = (s.round && s.maxRounds) ? `Round ${s.round}/${s.maxRounds}` : '';
+        el.wordSlots.textContent = (s.word || '').split('').join(' ');
+    }
+
+    function renderStatus(s) {
+        switch (s.phase) {
+            case 'waiting':
+                setBanner('Waiting for more players…');
+                showCanvasOverlay('Waiting for players…\nShare the room code to invite friends.');
+                break;
+            case 'choosing':
+                if (s.isDrawer) {
+                    setBanner('Pick a word to draw!');
+                    hideCanvasOverlay();
+                } else {
+                    setBanner(`${s.drawerName} is choosing a word…`);
+                    showCanvasOverlay(`${s.drawerName} is choosing a word…`);
+                }
+                break;
+            case 'drawing':
+                setBanner(s.isDrawer ? `Your turn! Draw: ${s.word}` : `${s.drawerName} is drawing — start guessing!`);
+                hideCanvasOverlay();
+                break;
+            case 'reveal':
+                setBanner(`The word was "${s.word}"`);
+                showCanvasOverlay(`The word was:\n${s.word}`);
+                break;
+            case 'gameover':
+                setBanner('Game over!');
+                showCanvasOverlay(gameOverText(s.players || []));
+                break;
+            default:
+                setBanner('');
+                hideCanvasOverlay();
+        }
+    }
+
+    function gameOverText(players) {
+        const board = players.map((p, i) => `${i + 1}. ${p.name} — ${p.score}`).join('\n');
+        return `Game over!\n\n${board}`;
+    }
+
+    function renderPlayers(players, youId) {
+        el.playerList.replaceChildren();
+        for (const p of players) {
+            const row = document.createElement('div');
+            row.className = 'player-row';
+            if (p.id === youId) row.classList.add('you');
+            if (p.guessed) row.classList.add('guessed');
+
+            const name = document.createElement('span');
+            name.className = 'player-name';
+            if (p.drawing) {
+                const icon = document.createElement('i');
+                icon.className = 'fas fa-pencil-alt';
+                name.appendChild(icon);
+            } else if (p.guessed) {
+                const icon = document.createElement('i');
+                icon.className = 'fas fa-check';
+                name.appendChild(icon);
+            }
+            const label = document.createElement('span');
+            label.textContent = p.name + (p.id === youId ? ' (you)' : '');
+            name.appendChild(label);
+
+            const score = document.createElement('span');
+            score.className = 'player-score';
+            score.textContent = p.score;
+
+            row.append(name, score);
+            el.playerList.appendChild(row);
+        }
+    }
+
+    function setBanner(text) {
+        el.statusBanner.textContent = text;
+    }
+
+    function setTimer(seconds) {
+        el.timer.replaceChildren();
+        const icon = document.createElement('i');
+        icon.className = 'fas fa-clock';
+        el.timer.append(icon, ` ${seconds}s`);
+    }
+
+    function showCanvasOverlay(text) {
+        el.canvasOverlay.textContent = text;
+        el.canvasOverlay.classList.remove('hidden');
+    }
+
+    function hideCanvasOverlay() {
+        el.canvasOverlay.classList.add('hidden');
+    }
+
+    // --- Word choice (drawer) ------------------------------------------------
+    function showChoices(words) {
+        el.choiceButtons.replaceChildren();
+        for (const word of words) {
+            const btn = document.createElement('button');
+            btn.textContent = word;
+            btn.addEventListener('click', () => {
+                send({ type: 'pick', content: word });
+                hideChoiceOverlay();
+            });
+            el.choiceButtons.appendChild(btn);
+        }
+        el.choiceOverlay.classList.remove('hidden');
+    }
+
+    function hideChoiceOverlay() {
+        el.choiceOverlay.classList.add('hidden');
     }
 
     // --- Drawing -------------------------------------------------------------
@@ -79,130 +295,115 @@ window.addEventListener('DOMContentLoaded', () => {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
     }
 
-    function getMousePos(e) {
+    function getPos(e) {
         const rect = canvas.getBoundingClientRect();
-        return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+        return {
+            x: ((e.clientX - rect.left) / rect.width) * canvas.width,
+            y: ((e.clientY - rect.top) / rect.height) * canvas.height,
+        };
     }
 
-    canvas.addEventListener('mousedown', (e) => {
-        state.painting = true;
-        state.lastPos = getMousePos(e);
-    });
+    function startStroke(e) {
+        if (!local.canDraw) return;
+        local.painting = true;
+        local.lastPos = getPos(e);
+    }
 
-    window.addEventListener('mouseup', () => {
-        state.painting = false;
-        state.lastPos = null;
-    });
-
-    canvas.addEventListener('mousemove', (e) => {
-        if (!state.painting || !state.lastPos) return;
-
-        const pos = getMousePos(e);
+    function moveStroke(e) {
+        if (!local.painting || !local.lastPos || !local.canDraw) return;
+        const pos = getPos(e);
         const segment = {
             type: 'draw',
-            prevX: state.lastPos.x,
-            prevY: state.lastPos.y,
+            prevX: local.lastPos.x,
+            prevY: local.lastPos.y,
             x: pos.x,
             y: pos.y,
-            color: state.eraser ? ERASER_COLOR : state.color,
-            size: state.eraser ? ERASER_SIZE : PEN_SIZE,
+            color: local.eraser ? ERASER_COLOR : local.color,
+            size: local.eraser ? Math.max(local.size * 2, 20) : local.size,
         };
+        drawSegment(segment); // instant local feedback
+        send(segment);
+        local.lastPos = pos;
+    }
 
-        drawSegment(segment); // draw locally for instant feedback
-        send(segment);        // and share with everyone else
-        state.lastPos = pos;
+    function endStroke() {
+        local.painting = false;
+        local.lastPos = null;
+    }
+
+    canvas.addEventListener('mousedown', startStroke);
+    canvas.addEventListener('mousemove', moveStroke);
+    window.addEventListener('mouseup', endStroke);
+    canvas.addEventListener('touchstart', (e) => { e.preventDefault(); startStroke(e.touches[0]); });
+    canvas.addEventListener('touchmove', (e) => { e.preventDefault(); moveStroke(e.touches[0]); });
+    canvas.addEventListener('touchend', endStroke);
+
+    // --- Toolbar -------------------------------------------------------------
+    function setTool(useEraser) {
+        local.eraser = useEraser;
+        el.pencilBtn.classList.toggle('active', !useEraser);
+        el.eraserBtn.classList.toggle('active', useEraser);
+    }
+
+    function updateToolbarLock() {
+        el.toolbar.classList.toggle('disabled', !local.canDraw);
+        canvas.classList.toggle('locked', !local.canDraw);
+    }
+
+    el.pencilBtn.addEventListener('click', () => setTool(false));
+    el.eraserBtn.addEventListener('click', () => setTool(true));
+    el.colorPicker.addEventListener('input', (e) => { local.color = e.target.value; });
+    el.brushSize.addEventListener('input', (e) => { local.size = Number(e.target.value); });
+    el.clearBtn.addEventListener('click', () => {
+        if (!local.canDraw) return;
+        send({ type: 'clear' });
+        clearCanvas();
     });
 
     // --- Chat ----------------------------------------------------------------
-    const chatInput = document.getElementById('chatInput');
-    const chatBox = document.getElementById('chatBox');
-    const sendBtn = document.getElementById('sendBtn');
-
-    // appendChat builds the DOM with textContent so chat text can never be
-    // interpreted as HTML (prevents cross-site scripting via chat messages).
-    function appendChat(sender, text) {
-        if (!chatBox) return;
-
+    // Built with textContent so chat/guess text can never be interpreted as
+    // HTML (prevents cross-site scripting).
+    function appendChat(msg) {
         const line = document.createElement('div');
         line.className = 'chat-entry';
 
-        const name = document.createElement('strong');
-        name.style.color = DEFAULT_COLOR;
-        name.textContent = `${sender}: `;
+        if (msg.kind === 'system') {
+            line.classList.add('system');
+            line.textContent = msg.content;
+        } else if (msg.kind === 'correct') {
+            line.classList.add('correct');
+            line.textContent = msg.content;
+        } else {
+            const author = document.createElement('span');
+            author.className = 'author';
+            author.textContent = `${msg.sender}: `;
+            const body = document.createElement('span');
+            body.textContent = msg.content;
+            line.append(author, body);
+        }
 
-        const body = document.createElement('span');
-        body.textContent = text;
-
-        line.append(name, body);
-        chatBox.appendChild(line);
-        chatBox.scrollTop = chatBox.scrollHeight;
+        el.chatBox.appendChild(line);
+        el.chatBox.scrollTop = el.chatBox.scrollHeight;
     }
 
     function sendChat() {
-        if (!chatInput) return;
-        const text = chatInput.value.trim();
+        const text = el.chatInput.value.trim();
         if (!text) return;
-        send({ type: 'chat', content: text, sender: 'Guest' });
-        chatInput.value = '';
+        send({ type: 'chat', content: text });
+        el.chatInput.value = '';
     }
 
-    if (sendBtn) sendBtn.addEventListener('click', sendChat);
-    if (chatInput) {
-        chatInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') sendChat();
-        });
-    }
-
-    // --- Header: word slots and countdown -----------------------------------
-    const wordSlots = document.querySelector('.word-slots');
-    const clock = document.querySelector('.neon-text');
-
-    function updateWord(word) {
-        if (wordSlots) {
-            wordSlots.textContent = word.replace(/[a-zA-Z]/g, '_ ').trim();
-        }
-    }
-
-    function updateTimer(seconds) {
-        if (!clock) return;
-        const icon = document.createElement('i');
-        icon.className = 'fas fa-clock';
-        clock.replaceChildren(icon, ` ${seconds}s`);
-    }
-
-    // --- Toolbar -------------------------------------------------------------
-    const pencilBtn = document.getElementById('pencilBtn');
-    const eraserBtn = document.getElementById('eraserBtn');
-    const colorPicker = document.getElementById('colorPicker');
-    const clearBtn = document.getElementById('clearBtn');
-
-    function setTool(useEraser) {
-        state.eraser = useEraser;
-        if (pencilBtn) pencilBtn.classList.toggle('active', !useEraser);
-        if (eraserBtn) eraserBtn.classList.toggle('active', useEraser);
-    }
-
-    if (pencilBtn) pencilBtn.addEventListener('click', () => setTool(false));
-    if (eraserBtn) eraserBtn.addEventListener('click', () => setTool(true));
-    if (colorPicker) {
-        colorPicker.addEventListener('input', (e) => { state.color = e.target.value; });
-    }
-    if (clearBtn) {
-        clearBtn.addEventListener('click', () => {
-            send({ type: 'clear' });
-            clearCanvas();
-        });
-    }
+    el.sendBtn.addEventListener('click', sendChat);
+    el.chatInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') sendChat();
+    });
 
     // --- Canvas sizing -------------------------------------------------------
     function resizeCanvas() {
-        const rect = canvas.parentNode.getBoundingClientRect();
-        canvas.width = rect.width;
-        canvas.height = rect.height;
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
     }
-
     window.addEventListener('resize', resizeCanvas);
-    resizeCanvas();
+
+    updateToolbarLock();
 });

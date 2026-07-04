@@ -40,45 +40,57 @@ gracefully).
 
 ## 4. Play
 
-1. Open <http://localhost:8080> in your browser.
-2. Open the same URL in **one or more additional tabs or devices** on the same
-   machine to simulate multiple players.
-3. Draw on the canvas — every stroke appears live in the other tabs.
-4. Use the toolbar to switch between the **pencil** and **eraser**, pick a
-   **colour**, or **clear** the canvas for everyone.
-5. Type in the chat box and press **Enter** or **Send**.
-6. The header shows the round's **word slots** and a **countdown**. When the
-   timer hits zero a new round starts automatically: the canvas clears and a new
-   word is chosen.
+The game needs **at least two players**, so open more than one tab/device.
 
-A tab that joins mid-round is automatically caught up with the current word,
-timer, and everything drawn so far.
+1. Open <http://localhost:8080>, enter a **name**, and click **Create private
+   room**. A short **room code** appears in the header — share it.
+2. On another tab/device, open the same URL, enter a name, type the **room code**
+   into the join box, and click **Join**. The game starts automatically once two
+   players are in the room.
+3. Each turn, one player is the **drawer** and **chooses one of three words**;
+   everyone else sees a masked hint like `_ _ _ _` that reveals letters over time.
+   - **If you are the drawer:** pick a word, then the toolbar unlocks — use the
+     **pencil**, **eraser**, **colour**, **brush size**, and **clear** to draw it.
+   - **If you are guessing:** type your guess in the chat and press **Enter**. A
+     correct guess is hidden from others and scores points — the faster, the
+     more. The toolbar stays locked.
+4. A turn ends when everyone guesses or the timer hits zero, then the word is
+   revealed. After every player has drawn, the round advances. When all rounds
+   finish, the final scoreboard shows and a new game begins.
+
+A tab that joins a room mid-turn is automatically caught up with the current
+drawing, word hint, timer, and scores. When the last player leaves a room, it is
+cleaned up automatically.
 
 > **Play across devices on your network:** find your machine's LAN IP (e.g.
 > `192.168.1.20`) and have others open `http://192.168.1.20:8080`. Make sure your
 > firewall allows inbound connections on port 8080.
 
-## 5. Optional: AI-generated words (OpenAI)
+## 5. Optional: AI-generated words (Claude)
 
-By default, words come from a built-in offline list. To have OpenAI pick the
-words instead, set an API key **before** starting the server:
+By default, the three word choices come from a built-in offline list. To have
+**Claude** generate them instead, set your Anthropic API key **before** starting
+the server (it uses the official Anthropic Go SDK and the `claude-opus-4-8`
+model):
 
 ```sh
 # macOS / Linux
-export OPENAI_API_KEY=sk-...
+export ANTHROPIC_API_KEY=sk-ant-...
 go run .
 
 # Windows (PowerShell)
-$env:OPENAI_API_KEY = "sk-..."
+$env:ANTHROPIC_API_KEY = "sk-ant-..."
 go run .
 
 # Windows (cmd)
-set OPENAI_API_KEY=sk-...
+set ANTHROPIC_API_KEY=sk-ant-...
 go run .
 ```
 
-If the OpenAI call fails for any reason, the game logs a warning and falls back
-to a default word, so a round is never blocked.
+The word fetch runs in the background, so a slow API never freezes a room, and
+if the call fails the game falls back to built-in words — a round is never
+blocked. The key is read only from the environment and is never stored or
+committed.
 
 ## 6. Build a standalone binary (optional)
 
@@ -102,14 +114,29 @@ go test ./...
 | Symptom | Cause / fix |
 | --- | --- |
 | `bind: address already in use` (or port 8080 busy) | Another process is on 8080. Stop it, or change `listenAddr` in `main.go`. |
+| Nothing happens / "Waiting for more players…" | The game needs **two** players in the **same room**. Share the room code and join it in a second tab. |
+| "Room not found" | The code was mistyped or the room was empty and got cleaned up. Create a fresh room and share the new code. |
 | Page loads but nothing updates between tabs | The WebSocket didn't connect. Check the browser console and that you opened `http://localhost:8080` (not the `file://` path). |
+| The toolbar is greyed out | You are guessing, not drawing (or you haven't picked a word yet). Only the current drawer can draw. |
 | `go: command not found` | Go isn't installed or not on your `PATH`. Install from <https://go.dev/dl/>. |
-| Words look generic even with a key set | The env var wasn't set in the **same** shell before `go run .`, or the OpenAI call failed (see server logs). |
+| Words look generic even with a key set | The env var wasn't set in the **same** shell before `go run .`, or the Claude call failed (see server logs). |
 
 ## Changing settings
 
-Common knobs live as constants at the top of `main.go`:
+- The listen address is the `listenAddr` constant in `main.go` (default `:8080`).
+- The game rules — **topic**, **rounds**, **turn length**, **word-choice time**,
+  **reveal time**, and **minimum players** — live in `game.DefaultConfig()` in
+  `game/engine.go`:
 
-- `listenAddr` — the address/port to listen on (default `:8080`).
-- `roundTopic` — the word topic (`animals`, `food`, `objects`, …).
-- `roundSeconds` — the length of each round in seconds.
+  ```go
+  func DefaultConfig() Config {
+      return Config{
+          Topic:         "animals", // animals | food | objects | ...
+          MaxRounds:     3,
+          TurnSeconds:   80,
+          ChooseSeconds: 15, // time for the drawer to pick a word
+          RevealSeconds: 6,
+          MinPlayers:    2,
+      }
+  }
+  ```

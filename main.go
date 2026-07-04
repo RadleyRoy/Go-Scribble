@@ -1,39 +1,47 @@
 package main
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"time"
 
 	"go-scribble/game"
 )
 
 const (
-	listenAddr   = ":8080"
-	roundTopic   = "animals"
-	roundSeconds = 80
-	webDir       = "./web"
+	listenAddr = ":8080"
+	webDir     = "./web"
 )
 
 func main() {
-	// The hub owns all shared state on its own goroutine.
-	hub := game.NewHub()
-	go hub.Run()
+	// Load secrets (e.g. ANTHROPIC_API_KEY) from a gitignored .env file if present.
+	loadDotEnv(".env")
 
-	// Rounds stop cleanly when an interrupt arrives.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	gameLoop := game.NewGame(hub, newWordProvider(), roundTopic, roundSeconds)
-	go gameLoop.Run(ctx)
+	// Each private room runs its own engine; the manager owns their lifecycles.
+	rooms := game.NewRoomManager(newWordProvider(), game.DefaultConfig())
 
 	mux := http.NewServeMux()
 	mux.Handle("/", http.FileServer(http.Dir(webDir)))
+	mux.HandleFunc("/api/rooms", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		code := rooms.Create()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"code": code})
+	})
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
-		game.ServeWS(hub, w, r)
+		game.ServeWS(rooms, w, r)
 	})
 
 	server := &http.Server{
@@ -59,13 +67,45 @@ func main() {
 	}
 }
 
-// newWordProvider selects the AI-backed provider when an OpenAI key is present
-// and otherwise falls back to the dependency-free local provider.
+// newWordProvider uses Claude when ANTHROPIC_API_KEY is set, otherwise the
+// dependency-free local provider.
 func newWordProvider() game.WordProvider {
-	if key := os.Getenv("OPENAI_API_KEY"); key != "" {
-		log.Println("using OpenAI word provider")
-		return game.NewOpenAIWordProvider(key)
+	if key := os.Getenv("ANTHROPIC_API_KEY"); key != "" {
+		log.Println("using Claude word provider")
+		return game.NewClaudeWordProvider(key)
 	}
-	log.Println("using local word provider (set OPENAI_API_KEY to use OpenAI)")
+	log.Println("using local word provider (set ANTHROPIC_API_KEY to use Claude)")
 	return game.NewLocalWordProvider()
+}
+
+// loadDotEnv reads simple KEY=VALUE lines from a .env file into the process
+// environment without overriding variables that are already set. A missing file
+// is ignored, so real environment variables keep working in production. The file
+// is gitignored, which keeps secrets like the API key out of version control.
+func loadDotEnv(path string) {
+	f, err := os.Open(path)
+	if err != nil {
+		return // no .env file — that's fine
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, val, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		val = strings.Trim(strings.TrimSpace(val), `"'`) // strip optional surrounding quotes
+		if key == "" {
+			continue
+		}
+		if _, exists := os.LookupEnv(key); !exists {
+			_ = os.Setenv(key, val)
+		}
+	}
 }
