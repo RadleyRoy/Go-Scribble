@@ -31,9 +31,12 @@ go run .
 You should see:
 
 ```
-using local word provider (set OPENAI_API_KEY to use OpenAI)
+ANTHROPIC_API_KEY not set — using local word list (set it in .env to use Claude).
 server started at http://localhost:8080
 ```
+
+(With a key configured, you'll instead see `ANTHROPIC_API_KEY found — checking
+Claude access...` followed by `Claude API check OK` — see step 5.)
 
 The server keeps running until you stop it with **Ctrl+C** (it shuts down
 gracefully).
@@ -69,9 +72,20 @@ cleaned up automatically.
 ## 5. Optional: AI-generated words (Claude)
 
 By default, the three word choices come from a built-in offline list. To have
-**Claude** generate them instead, set your Anthropic API key **before** starting
-the server (it uses the official Anthropic Go SDK and the `claude-opus-4-8`
-model):
+**Claude** generate them instead, provide your Anthropic API key (it uses the
+official Anthropic Go SDK and the `claude-opus-4-8` model).
+
+**Recommended — a `.env` file.** Create a file named `.env` in the project root:
+
+```
+ANTHROPIC_API_KEY=sk-ant-...
+```
+
+`.env` is gitignored, so the key stays out of version control, and you don't have
+to re-set it every shell. The server loads it automatically on startup (it never
+overrides a variable already set in the environment).
+
+**Or a shell environment variable** set **before** `go run .`:
 
 ```sh
 # macOS / Linux
@@ -87,10 +101,14 @@ set ANTHROPIC_API_KEY=sk-ant-...
 go run .
 ```
 
-The word fetch runs in the background, so a slow API never freezes a room, and
-if the call fails the game falls back to built-in words — a round is never
-blocked. The key is read only from the environment and is never stored or
-committed.
+On startup the server makes one tiny verification request and logs `Claude API
+check OK` (or a clear `FAILED` reason, e.g. a bad key or no credit). Because Opus
+4.8 has no temperature knob, the provider asks Claude for a larger, varied pool
+and randomly samples the three choices, so the words don't repeat the same
+predictable picks each turn. The word fetch runs in the background, so a slow API
+never freezes a room, and if the call fails the game falls back to built-in
+words — a round is never blocked. The key is read only from the environment/`.env`
+and is never logged or committed.
 
 ## 6. Build a standalone binary (optional)
 
@@ -119,7 +137,7 @@ go test ./...
 | Page loads but nothing updates between tabs | The WebSocket didn't connect. Check the browser console and that you opened `http://localhost:8080` (not the `file://` path). |
 | The toolbar is greyed out | You are guessing, not drawing (or you haven't picked a word yet). Only the current drawer can draw. |
 | `go: command not found` | Go isn't installed or not on your `PATH`. Install from <https://go.dev/dl/>. |
-| Words look generic even with a key set | The env var wasn't set in the **same** shell before `go run .`, or the Claude call failed (see server logs). |
+| Words look generic even with a key set | The key isn't in `.env` (project root) or wasn't set in the **same** shell before `go run .`, or the Claude call failed — check the startup log for `Claude API check OK` vs `FAILED`. |
 
 ## Changing settings
 

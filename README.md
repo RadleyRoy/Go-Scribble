@@ -37,8 +37,23 @@ again in another tab/device, enter the same **room code**, and play. See
 **RUNNING.md** for a detailed guide, LAN play, and troubleshooting.
 
 Words come from a built-in offline list by default. To have Claude generate the
-word choices instead, set `ANTHROPIC_API_KEY` before starting the server (uses
-the official Anthropic Go SDK and the `claude-opus-4-8` model).
+word choices instead, provide an `ANTHROPIC_API_KEY` before starting the server
+(uses the official Anthropic Go SDK and the `claude-opus-4-8` model). The key can
+come from a real environment variable or from a gitignored **`.env`** file in the
+project root:
+
+```sh
+echo 'ANTHROPIC_API_KEY=sk-ant-...' > .env
+go run .
+```
+
+On startup the server verifies Claude access and logs a clear `Claude API check
+OK` / `FAILED` result. Because Opus 4.8 has no temperature control, the provider
+asks Claude for a larger, deliberately varied pool of words and randomly samples
+the three choices from it, so successive turns don't collapse onto the same
+predictable picks. If a call fails, it falls back to the offline list so a round
+is never blocked. The key is never logged or committed. See **RUNNING.md** for
+per-shell instructions.
 
 ## Testing
 
@@ -71,7 +86,19 @@ tests/
   claude_word_test.go Claude provider against a stub Anthropic server.
   room_test.go       Room creation, codes, and empty-room cleanup.
   engine_test.go     End-to-end WebSocket game-flow test (room + word choice).
+.github/workflows/
+  ci.yml             CI: build, vet, test, and smoke-run (also runnable from the
+                     Actions tab via workflow_dispatch).
+RUNNING.md           Detailed run/play guide, LAN play, and troubleshooting.
 ```
+
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on every push/PR to `main` and can be triggered
+manually from the repository's **Actions** tab (workflow_dispatch). It verifies
+the project **builds**, passes `go vet`, has all **tests** green, and **runs**
+(a smoke start of the server). The Claude tests use a stub server, so CI needs no
+API key.
 
 ## Design notes
 
