@@ -65,8 +65,20 @@ window.addEventListener('DOMContentLoaded', () => {
     }
 
     // --- Lobby: create / join a room ----------------------------------------
+    // A name is required before creating or joining a room.
+    function requireName() {
+        const name = el.nameInput.value.trim();
+        if (!name) {
+            el.lobbyError.textContent = 'Please enter a name first.';
+            el.nameInput.focus();
+            return null;
+        }
+        return name;
+    }
+
     async function createRoom() {
         el.lobbyError.textContent = '';
+        if (!requireName()) return;
         try {
             const res = await fetch('/api/rooms', { method: 'POST' });
             if (!res.ok) throw new Error(`server responded ${res.status}`);
@@ -80,6 +92,7 @@ window.addEventListener('DOMContentLoaded', () => {
 
     function joinRoom() {
         el.lobbyError.textContent = '';
+        if (!requireName()) return;
         const code = el.codeInput.value.trim().toUpperCase();
         if (!code) {
             el.lobbyError.textContent = 'Enter a room code to join.';
@@ -89,7 +102,7 @@ window.addEventListener('DOMContentLoaded', () => {
     }
 
     function connect(code) {
-        local.name = el.nameInput.value.trim() || 'Player';
+        local.name = el.nameInput.value.trim(); // required, validated above
         const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
         socket = new WebSocket(`${wsProtocol}://${window.location.host}/ws?room=${encodeURIComponent(code)}`);
 

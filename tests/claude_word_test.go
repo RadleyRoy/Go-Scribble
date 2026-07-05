@@ -37,14 +37,44 @@ func TestClaudeWordProviderParsesResponse(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	want := []string{"cat", "dog", "bird"}
+	// The provider samples/shuffles its pool, so assert on set membership rather
+	// than order.
+	want := map[string]bool{"cat": true, "dog": true, "bird": true}
 	if len(words) != len(want) {
-		t.Fatalf("expected %v, got %v", want, words)
+		t.Fatalf("expected %d words from %v, got %v", len(want), want, words)
 	}
-	for i := range want {
-		if words[i] != want[i] {
-			t.Fatalf("word %d = %q, want %q (all: %v)", i, words[i], want[i], words)
+	for _, w := range words {
+		if !want[w] {
+			t.Fatalf("unexpected word %q (all: %v)", w, words)
 		}
+	}
+}
+
+// TestClaudeWordProviderFallsBackOnError verifies that when the API call fails
+// the provider returns varied local words instead of erroring — which is what
+// keeps the game from repeating the same fixed words every turn.
+func TestClaudeWordProviderFallsBackOnError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest) // 400 is not retried by the SDK
+		_, _ = w.Write([]byte(`{"type":"error","error":{"type":"invalid_request_error","message":"credit balance too low"}}`))
+	}))
+	defer server.Close()
+
+	p := game.NewClaudeWordProvider("test-key", option.WithBaseURL(server.URL))
+	words, err := p.Words("animals", 3)
+	if err != nil {
+		t.Fatalf("expected graceful fallback, got error: %v", err)
+	}
+	if len(words) != 3 {
+		t.Fatalf("expected 3 fallback words, got %v", words)
+	}
+	seen := map[string]bool{}
+	for _, w := range words {
+		if w == "" || seen[w] {
+			t.Fatalf("expected distinct non-empty words, got %v", words)
+		}
+		seen[w] = true
 	}
 }
 
