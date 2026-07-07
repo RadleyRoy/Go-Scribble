@@ -42,10 +42,16 @@ func (c *Client) trySend(v interface{}) bool {
 	}
 }
 
-// readPump reads client frames and forwards them to the engine.
+// readPump reads client frames and forwards them to the engine. Every channel
+// send selects against engine.stopped: the engine may stop while this client
+// is still attached (room teardown racing a late registration), and a plain
+// send would then block this goroutine forever.
 func (c *Client) readPump() {
 	defer func() {
-		c.engine.unregister <- c
+		select {
+		case c.engine.unregister <- c:
+		case <-c.engine.stopped:
+		}
 		c.conn.Close()
 	}()
 
@@ -63,7 +69,11 @@ func (c *Client) readPump() {
 			}
 			return
 		}
-		c.engine.incoming <- inbound{client: c, msg: msg}
+		select {
+		case c.engine.incoming <- inbound{client: c, msg: msg}:
+		case <-c.engine.stopped:
+			return
+		}
 	}
 }
 

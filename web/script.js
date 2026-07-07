@@ -103,21 +103,28 @@ window.addEventListener('DOMContentLoaded', () => {
 
     function connect(code) {
         local.name = el.nameInput.value.trim(); // required, validated above
+        if (socket) socket.close(); // a double-click or rejoin supersedes the old connection
         const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-        socket = new WebSocket(`${wsProtocol}://${window.location.host}/ws?room=${encodeURIComponent(code)}`);
+        const ws = new WebSocket(`${wsProtocol}://${window.location.host}/ws?room=${encodeURIComponent(code)}`);
+        socket = ws;
 
-        socket.addEventListener('open', () => {
+        // Each handler ignores events from a superseded socket so only the
+        // latest connection ever joins the room or drives the UI.
+        ws.addEventListener('open', () => {
+            if (ws !== socket) return;
             send({ type: 'join', name: local.name });
             el.roomChip.textContent = code;
             el.lobbyOverlay.classList.add('hidden');
             setBanner('Connected. Waiting for the game…');
             if (el.chatInput) el.chatInput.focus();
         });
-        socket.addEventListener('close', () => {
+        ws.addEventListener('close', () => {
+            if (ws !== socket) return;
             if (!el.lobbyOverlay.classList.contains('hidden')) return;
             setBanner('Disconnected. Refresh to reconnect.');
         });
-        socket.addEventListener('message', (event) => {
+        ws.addEventListener('message', (event) => {
+            if (ws !== socket) return;
             let msg;
             try {
                 msg = JSON.parse(event.data);
@@ -316,32 +323,69 @@ window.addEventListener('DOMContentLoaded', () => {
         };
     }
 
+    function strokeColor() {
+        return local.eraser ? ERASER_COLOR : local.color;
+    }
+
+    function strokeSize() {
+        return local.eraser ? Math.max(local.size * 2, 20) : local.size;
+    }
+
+    // Network sends are coalesced to one segment per animation frame: a
+    // high-polling-rate mouse can fire mousemove far faster than 60/s, and one
+    // message per event floods the socket and other clients' send buffers.
+    // Local drawing still happens per event, so the drawer's own line stays
+    // perfectly smooth.
+    let sendAnchor = null; // last point actually sent to the server
+    let sendQueued = false;
+
+    function flushStroke() {
+        sendQueued = false;
+        if (!sendAnchor || !local.lastPos) return;
+        const pos = local.lastPos;
+        if (pos.x === sendAnchor.x && pos.y === sendAnchor.y) return;
+        send({
+            type: 'draw',
+            prevX: sendAnchor.x,
+            prevY: sendAnchor.y,
+            x: pos.x,
+            y: pos.y,
+            color: strokeColor(),
+            size: strokeSize(),
+        });
+        sendAnchor = pos;
+    }
+
     function startStroke(e) {
         if (!local.canDraw) return;
         local.painting = true;
         local.lastPos = getPos(e);
+        sendAnchor = local.lastPos;
     }
 
     function moveStroke(e) {
         if (!local.painting || !local.lastPos || !local.canDraw) return;
         const pos = getPos(e);
-        const segment = {
-            type: 'draw',
+        drawSegment({ // instant local feedback
             prevX: local.lastPos.x,
             prevY: local.lastPos.y,
             x: pos.x,
             y: pos.y,
-            color: local.eraser ? ERASER_COLOR : local.color,
-            size: local.eraser ? Math.max(local.size * 2, 20) : local.size,
-        };
-        drawSegment(segment); // instant local feedback
-        send(segment);
+            color: strokeColor(),
+            size: strokeSize(),
+        });
         local.lastPos = pos;
+        if (!sendQueued) {
+            sendQueued = true;
+            requestAnimationFrame(flushStroke);
+        }
     }
 
     function endStroke() {
+        if (local.painting) flushStroke(); // don't lose the stroke's tail
         local.painting = false;
         local.lastPos = null;
+        sendAnchor = null;
     }
 
     canvas.addEventListener('mousedown', startStroke);
@@ -387,6 +431,7 @@ window.addEventListener('DOMContentLoaded', () => {
             line.classList.add('correct');
             line.textContent = msg.content;
         } else {
+            if (msg.kind === 'quiet') line.classList.add('quiet'); // drawer/guessed-only channel
             const author = document.createElement('span');
             author.className = 'author';
             author.textContent = `${msg.sender}: `;
@@ -410,13 +455,6 @@ window.addEventListener('DOMContentLoaded', () => {
     el.chatInput.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') sendChat();
     });
-
-    // --- Canvas sizing -------------------------------------------------------
-    function resizeCanvas() {
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
-    }
-    window.addEventListener('resize', resizeCanvas);
 
     updateToolbarLock();
 });

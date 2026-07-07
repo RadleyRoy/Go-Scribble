@@ -40,6 +40,27 @@ func TestRoomManagerCodesAreUnique(t *testing.T) {
 	}
 }
 
+// TestUnjoinedRoomIsReaped verifies a room that is created but never joined
+// tears itself down after its empty-room timeout instead of leaking its
+// engine goroutine and map entry forever.
+func TestUnjoinedRoomIsReaped(t *testing.T) {
+	cfg := game.DefaultConfig()
+	cfg.EmptyRoomSeconds = 1
+	m := game.NewRoomManager(game.NewLocalWordProvider(), cfg)
+
+	code := m.Create()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, ok := m.Get(code); !ok {
+			return // reaped — success
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("never-joined room was not reaped")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
 // TestRoomIsReapedWhenEmpty verifies the room (and its engine goroutine) is torn
 // down once its last client disconnects.
 func TestRoomIsReapedWhenEmpty(t *testing.T) {

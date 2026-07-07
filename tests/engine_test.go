@@ -18,6 +18,7 @@ type frame struct {
 	Type       string   `json:"type"`
 	Phase      string   `json:"phase"`
 	IsDrawer   bool     `json:"isDrawer"`
+	DrawerName string   `json:"drawerName"`
 	Word       string   `json:"word"`
 	WordMasked bool     `json:"wordMasked"`
 	YouID      string   `json:"youId"`

@@ -26,12 +26,15 @@ const (
 	wordChoiceCount      = 3     // words offered to the drawer each turn
 	drawerPointsPerGuess = 30    // drawer earns this per correct guesser
 	maxHistoryStrokes    = 20000 // safety cap on strokes retained per turn
-	maxChatLen           = 200
+	maxChatLen           = 200   // in runes, so multi-byte characters survive truncation
 	maxNameLen           = 20
 )
 
+// fallbackChoices is the word set used when the provider fails outright; it is
+// the same generic list LocalWordProvider uses for unknown topics, so there is
+// a single fallback vocabulary to maintain.
 func fallbackChoices() []string {
-	return []string{"apple", "house", "tree", "car", "star", "fish", "boat", "clock"}
+	return defaultWords
 }
 
 // Config tunes the game. Durations are kept configurable so tests can run a
@@ -43,17 +46,23 @@ type Config struct {
 	ChooseSeconds int
 	RevealSeconds int
 	MinPlayers    int
+	// EmptyRoomSeconds is how long a room may sit with zero connected clients
+	// before it tears itself down. This covers rooms that are created but never
+	// joined (a room whose last client leaves is reaped immediately). Zero or
+	// negative means the 60-second default.
+	EmptyRoomSeconds int
 }
 
 // DefaultConfig returns sensible defaults for a public game.
 func DefaultConfig() Config {
 	return Config{
-		Topic:         "animals",
-		MaxRounds:     3,
-		TurnSeconds:   80,
-		ChooseSeconds: 15,
-		RevealSeconds: 6,
-		MinPlayers:    2,
+		Topic:            "animals",
+		MaxRounds:        3,
+		TurnSeconds:      80,
+		ChooseSeconds:    15,
+		RevealSeconds:    6,
+		MinPlayers:       2,
+		EmptyRoomSeconds: 60,
 	}
 }
 
@@ -94,8 +103,10 @@ type Engine struct {
 	phase          Phase
 	round          int
 	turnsThisRound int
-	drawerIdx      int // index into players; -1 when there is no drawer
+	drawerIdx      int     // rotation cursor into players; -1 when there is no drawer
+	drawer         *Player // the player drawing this turn; nil once they leave
 	timeLeft       int
+	emptySeconds   int // consecutive seconds with zero connected clients
 
 	choices      []string // word options for the current chooser; nil until fetched
 	wordGen      int      // increments each turn to invalidate stale fetches
@@ -128,6 +139,16 @@ func (e *Engine) Run(ctx context.Context) {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	defer close(e.stopped)
+	// Tear down any client still registered when the engine stops (e.g. one
+	// that won the register/ctx.Done select race during room removal): closing
+	// send ends its writePump, closing the conn ends its readPump, and the
+	// stopped channel (closed just after this runs) unblocks its channel sends.
+	defer func() {
+		for c := range e.clients {
+			close(c.send)
+			c.conn.Close()
+		}
+	}()
 
 	for {
 		select {
@@ -176,13 +197,21 @@ func (e *Engine) removePlayer(p *Player) {
 	if idx < 0 {
 		return
 	}
-	wasDrawer := e.drawerIdx == idx && (e.phase == PhaseDrawing || e.phase == PhaseChoosing)
+	wasDrawer := e.drawer == p && (e.phase == PhaseDrawing || e.phase == PhaseChoosing)
 	wasChoosing := e.phase == PhaseChoosing
 
 	e.players = append(e.players[:idx], e.players[idx+1:]...)
-	// Keep drawerIdx pointing at the same logical position after the shift.
+	// Keep the rotation cursor pointing at the same logical position after the
+	// shift; identity questions ("who is drawing?") go through e.drawer, which
+	// this arithmetic must never influence.
 	if idx <= e.drawerIdx {
 		e.drawerIdx--
+	}
+	if e.drawer == p {
+		e.drawer = nil // a departed player can no longer be scored or shown as drawer
+	}
+	if p.guessed {
+		e.guessedCount-- // keep the count equal to remaining players who guessed
 	}
 	e.systemChat(p.name + " left the game.")
 
@@ -243,7 +272,7 @@ func (e *Engine) handleDraw(c *Client, msg Message) {
 	if len(e.history) < maxHistoryStrokes {
 		e.history = append(e.history, seg)
 	}
-	e.broadcast(seg)
+	e.broadcastLossy(seg)
 }
 
 func (e *Engine) handleClear(c *Client) {
@@ -264,25 +293,40 @@ func (e *Engine) handleChat(c *Client, msg Message) {
 	if text == "" {
 		return
 	}
-	if len(text) > maxChatLen {
-		text = text[:maxChatLen]
+	// Truncate by runes, not bytes: a byte slice could split a multi-byte
+	// character and garble the message on every client.
+	if r := []rune(text); len(r) > maxChatLen {
+		text = string(r[:maxChatLen])
 	}
 
-	// A guesser who hasn't guessed yet may score by naming the word.
-	if e.phase == PhaseDrawing && !e.isDrawer(p) && !p.guessed {
-		if equalsWord(text, e.word) {
-			e.acceptGuess(c, p)
+	if e.phase == PhaseDrawing {
+		if !e.isDrawer(p) && !p.guessed {
+			// A guesser who hasn't guessed yet may score by naming the word.
+			if equalsWord(text, e.word) {
+				e.acceptGuess(c, p)
+				return
+			}
+		} else {
+			// The drawer and players who already know the word talk only to
+			// each other while the turn is live, so neither the word nor hints
+			// can leak to players still guessing.
+			e.broadcastToInsiders(ChatMessage{Type: MsgChat, Kind: ChatQuiet, Sender: p.name, Content: text})
 			return
 		}
 	}
 
-	// Nobody may broadcast the exact word while a turn is live (no spoilers).
-	if e.phase == PhaseDrawing && equalsWord(text, e.word) {
-		e.send(c, ChatMessage{Type: MsgChat, Kind: ChatSystem, Content: "Shh — no spoilers!"})
-		return
-	}
-
 	e.broadcast(ChatMessage{Type: MsgChat, Kind: ChatNormal, Sender: p.name, Content: text})
+}
+
+// broadcastToInsiders delivers a message only to clients who already know the
+// word this turn: the drawer and players who have guessed it.
+func (e *Engine) broadcastToInsiders(v interface{}) {
+	for c, p := range e.clients {
+		if p == nil || (p != e.drawer && !p.guessed) {
+			continue
+		}
+		e.send(c, v)
+	}
 }
 
 func (e *Engine) handlePick(c *Client, msg Message) {
@@ -340,6 +384,7 @@ func (e *Engine) beginChoosing() {
 	}
 
 	e.drawerIdx = (e.drawerIdx + 1) % len(e.players)
+	e.drawer = e.players[e.drawerIdx]
 	e.turnsThisRound++
 	for _, p := range e.players {
 		p.guessed = false
@@ -436,7 +481,10 @@ func (e *Engine) gameOver() {
 	e.broadcastState()
 }
 
-func (e *Engine) toWaiting() {
+// enterWaiting clears every per-turn field and returns the room to the waiting
+// phase. Both waiting entry points share it so a new per-turn field can't be
+// forgotten in one of them.
+func (e *Engine) enterWaiting() {
 	e.phase = PhaseWaiting
 	e.word = ""
 	e.wordRunes = nil
@@ -444,26 +492,43 @@ func (e *Engine) toWaiting() {
 	e.choices = nil
 	e.history = nil
 	e.drawerIdx = -1
+	e.drawer = nil
+	e.guessedCount = 0
+	e.timeLeft = 0
+	for _, p := range e.players {
+		p.guessed = false
+	}
 	e.broadcast(Message{Type: MsgClear})
+}
+
+func (e *Engine) toWaiting() {
+	e.enterWaiting()
 	e.systemChat("Waiting for more players to join...")
 	e.broadcastState()
 }
 
 func (e *Engine) resetToLobby() {
-	e.phase = PhaseWaiting
-	e.word = ""
-	e.wordRunes = nil
-	e.revealed = nil
-	e.choices = nil
-	e.history = nil
-	e.drawerIdx = -1
-	e.broadcast(Message{Type: MsgClear})
+	e.enterWaiting()
 	e.broadcastState()
 	e.maybeStartGame() // start a fresh game right away if players remain
 }
 
 // tick advances the countdown for the active phase once per second.
 func (e *Engine) tick() {
+	// Reap rooms nobody is connected to. handleUnregister tears a room down the
+	// moment its last client leaves; this covers rooms that were created over
+	// the API but never joined at all, which would otherwise leak their engine
+	// goroutine, ticker, and manager map entry forever.
+	if len(e.clients) == 0 {
+		e.emptySeconds++
+		if e.emptySeconds >= e.emptyRoomLimit() && e.onEmpty != nil {
+			e.onEmpty()
+			return
+		}
+	} else {
+		e.emptySeconds = 0
+	}
+
 	switch e.phase {
 	case PhaseChoosing:
 		if e.choices == nil {
@@ -565,6 +630,17 @@ func (e *Engine) broadcast(v interface{}) {
 	}
 }
 
+// broadcastLossy delivers to every client but silently skips clients whose
+// buffers are full instead of closing them. Draw segments are high-rate and
+// loss-tolerant, so a briefly stalled viewer misses a few strokes rather than
+// being disconnected mid-game; a genuinely dead connection is still reaped by
+// the ping/pong deadline.
+func (e *Engine) broadcastLossy(v interface{}) {
+	for c := range e.clients {
+		_ = c.trySend(v)
+	}
+}
+
 func (e *Engine) send(c *Client, v interface{}) {
 	if !c.trySend(v) {
 		c.conn.Close()
@@ -585,16 +661,20 @@ func (e *Engine) sendHistoryTo(c *Client) {
 }
 
 func (e *Engine) broadcastState() {
+	// Build the scoreboard once per broadcast, not once per client: the views
+	// are read-only after this point, so every personalised state can share
+	// the same slice.
+	views := e.playerViews()
 	for c := range e.clients {
-		e.sendState(c)
+		e.send(c, e.stateWith(c, views))
 	}
 }
 
 func (e *Engine) sendState(c *Client) {
-	e.send(c, e.stateFor(c))
+	e.send(c, e.stateWith(c, e.playerViews()))
 }
 
-func (e *Engine) stateFor(c *Client) StateMessage {
+func (e *Engine) stateWith(c *Client, views []PlayerView) StateMessage {
 	me := e.clients[c]
 	drawer := e.currentDrawer()
 
@@ -604,7 +684,7 @@ func (e *Engine) stateFor(c *Client) StateMessage {
 		Round:     e.round,
 		MaxRounds: e.cfg.MaxRounds,
 		TimeLeft:  e.timeLeft,
-		Players:   e.playerViews(),
+		Players:   views,
 	}
 	if me != nil {
 		st.YouID = me.id
@@ -649,16 +729,24 @@ func (e *Engine) playerViews() []PlayerView {
 
 func (e *Engine) playerCount() int { return len(e.players) }
 
+func (e *Engine) emptyRoomLimit() int {
+	if e.cfg.EmptyRoomSeconds > 0 {
+		return e.cfg.EmptyRoomSeconds
+	}
+	return 60
+}
+
 func (e *Engine) isDrawer(p *Player) bool {
 	return p != nil && e.currentDrawer() == p
 }
 
+// currentDrawer identifies the drawer by stable reference, never by index:
+// slice-removal arithmetic on drawerIdx must not silently re-assign the role
+// (and its points) to a neighbouring player.
 func (e *Engine) currentDrawer() *Player {
 	switch e.phase {
 	case PhaseChoosing, PhaseDrawing, PhaseReveal:
-		if e.drawerIdx >= 0 && e.drawerIdx < len(e.players) {
-			return e.players[e.drawerIdx]
-		}
+		return e.drawer
 	}
 	return nil
 }

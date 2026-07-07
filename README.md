@@ -20,7 +20,10 @@ secret word while everyone else races to guess it in chat for points.
   game begins automatically.
 - Only the current drawer can draw or clear the canvas.
 - Players who join mid-turn are caught up with the current drawing and state.
-- Empty rooms are torn down automatically when the last player leaves.
+- While a turn is live, chat from the drawer and from players who already
+  guessed is shown only to others who know the word, so hints can't leak.
+- Empty rooms are torn down automatically — when the last player leaves, or
+  after a minute if nobody ever joins.
 
 ## Requirements
 

@@ -300,6 +300,12 @@ canvas.locked {
     font-weight: 700;
 }
 
+/* Drawer/guessed-players channel: visible only to those who know the word. */
+.chat-entry.quiet {
+    opacity: 0.75;
+    font-style: italic;
+}
+
 .chat-input-wrapper {
     display: flex;
     background: #0d1117;

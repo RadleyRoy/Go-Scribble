@@ -63,7 +63,8 @@ The game needs **at least two players**, so open more than one tab/device.
 
 A tab that joins a room mid-turn is automatically caught up with the current
 drawing, word hint, timer, and scores. When the last player leaves a room, it is
-cleaned up automatically.
+cleaned up automatically; a room that is created but never joined is cleaned up
+after about a minute.
 
 > **Play across devices on your network:** find your machine's LAN IP (e.g.
 > `192.168.1.20`) and have others open `http://192.168.1.20:8080`. Make sure your

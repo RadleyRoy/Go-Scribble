@@ -25,6 +25,7 @@ const (
 	ChatNormal  = "normal"  // an ordinary message: "<sender>: <content>"
 	ChatSystem  = "system"  // a server announcement
 	ChatCorrect = "correct" // private confirmation that you guessed the word
+	ChatQuiet   = "quiet"   // drawer/guessed-players channel, hidden from active guessers
 )
 
 // LogicalWidth and LogicalHeight define the fixed drawing coordinate space.
