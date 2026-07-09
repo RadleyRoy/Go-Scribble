@@ -378,7 +378,10 @@ func (e *Engine) maybeStartGame() {
 // candidates. The fetch runs in a goroutine so a slow (networked) provider can
 // never freeze the room; the result arrives on wordsReady, guarded by wordGen.
 func (e *Engine) beginChoosing() {
-	if e.playerCount() < e.cfg.MinPlayers {
+	// A turn needs at least MinPlayers; the explicit empty check also stops a
+	// zero or negative MinPlayers from reaching the `% len(e.players)` below
+	// with no players, which would be a divide-by-zero panic.
+	if e.playerCount() == 0 || e.playerCount() < e.cfg.MinPlayers {
 		e.toWaiting()
 		return
 	}
